@@ -1,0 +1,438 @@
+---
+title: "stat497"
+author: "E.Sekerci"
+date: "2022-12-16"
+output:
+  rmdformats::material:
+    code_folding: show
+---
+
+# **QUIZ 1**
+
+<span style="color:red">**Data Description**</span>
+
+- The “clay” data are about Quarterly production of clay bricks: million units. The “clay” data are quarterly data starting from 1965.
+
+<span style="color:red">**Initial Settings**</span> 
+```{r}
+## Loading packages
+library(readr)
+library(tidyverse)
+library(lubridate)
+library(gridExtra)
+library(doParallel)
+library(sarima)
+library(forecast)
+library(ggplot2)
+library(dplyr)
+library(hrbrthemes)
+library(plotly)
+library(stats)
+library(fpp2)
+library(fUnitRoots)
+library(pdR)
+library(TSA)
+library(caschrono)
+library(anomalize)
+library(tibbletime)
+library(uroot)
+library(fpp2)
+library(aTSA)
+library(MASS)
+library(tseries)
+library(tseries)
+library(lmtest)
+```
+
+```{r}
+## Loading data set
+df <- read_csv("clay.txt", NULL, col_names = "value")
+```
+
+```{r}
+## Preview the data
+dplyr::glimpse(df)
+```
+```{r}
+## Creating quartely date column
+a<-seq(as.Date("1965/1/1"), as.Date("1993/12/30"), by = "quarter")
+a
+```
+```{r}
+df$period = a
+```
+
+```{r}
+head(df)
+```
+```{r}
+paste0(lubridate::year(df$period), quarters(df$period))
+```
+```{r}
+class(df)
+```
+```{r}
+## Checking missing values
+sum(is.na(df))
+```
+```{r}
+df2<-ts(df[,1],start=c(1965,1,1), frequency=4)
+df2
+```
+```{r}
+summary(df2)
+```
+Mean and median values are close to each other however by looking at descriptive statistics we might also claim that there might be some outliers.
+```{r}
+sd(df2)
+```
+```{r}
+df3<- df %>% dplyr::mutate(year = lubridate::year(period), quarter = lubridate::quarter(period))
+head(df3)
+```
+```{r}
+str(df3)
+```
+```{r}
+df3$quarter<-as.factor(df3$quarter)
+df3$year<-as.factor(df3$year)
+```
+
+```{r}
+bp <- ggplot(df3, aes(x=quarter, y=value, fill=quarter)) + 
+  geom_boxplot()+
+  labs(title="Boxplot Across Months",x="Quarter", y = "Billions of Dollars")
+bp
+```
+Since the median values for each quarter are fluctuating (not follow the same line), there might be indication of seasonal components.
+```{r}
+bp <- ggplot(df3, aes(x=year, y=value, fill=year)) + 
+  geom_boxplot()+
+  labs(title="Boxplot Across Yeasr",x="year", y = "Billions of Dollars")
+bp + theme(axis.text.x = element_text(angle = 60, hjust = 1))
+```
+The above plot suggests that the series has somehow a significant trend. Moreover, we see that there are some outliers present.
+
+```{r}
+gglagplot(df2) + ggtitle("Clay Brick Production in Australia") + ylab("Clay Brick Production") + xlab("Clay Brick Production") + theme(axis.text.x = element_text(angle=90))
+```
+The relationship is strongly positive for a lag equaling 4 for the lowest values of clay brick production. Beyond a clay brick production of 400, there appears to be a lag of 1 quarter, which indicates that there is no seasonality for larger clay brick production, which corresponds to the later years in the data set.
+
+```{r}
+ggsubseriesplot(df2) + ggtitle("Clay Brick Production in Australia") + ylab("Clay Brick Production")
+```
+The plot displays the seasonality of clay brick production, as it is lowest in the first quarter, increase through the third quarter and then decreases in the fourth quarter. The seasonality appears to have a frequency of 4 quarters, or 1 year. An upward trend is visible for the first third of the data, which is from 1956 to about 1969. From 1969 through 1994, there is no longer an upward trend, but instead a cycle of increasing and decreasing clay brick production occurs on top of the seasonality.
+
+```{r}
+raw <- df$value
+low <- ts(loess(value~as.numeric(period),df,span=0.5)$fitted, start=1965,frequency=4)
+hi <- ts(df$value - loess(df$value~as.numeric(df$period),span=0.1)$fitted, start=1965,frequency=4)
+cycles <- raw - hi - low
+plot(ts.union(raw, low,hi,cycles),main="Decomposition of production as trend + noise + cycles")
+increase_rate = (low[116]-low[1])/(1993-1965)
+print(increase_rate)
+plot(hi[1:12],type = "l", main = "High frequency noise of a three-year span")
+```
+From the above plots we can draw following conclusions,
+
+- The low frequency plot shows us an estimate of the trend followed by the PRODUCTİON from 1965 to 1993. The average increase rate is 3.553966 million unit per year.
+
+- The high frequency plot shows us th seasonal changes in production of clay brick. When we zoom into high frequency we see a PRODUCTİON peak in third quarter and this pattern occurs over every year. The seasonal change have a period of quarterly.
+
+<span style="color:darkred">**a.	Plot the series, draw ACF and examine carefully the trend and seasonal phenomenon contained in the data. Interpret your results**</span> 
+
+```{r}
+autoplot(df2, ylab="million units", main="Time Series Plot of Quartely Clay Brick Production", col="purple")+theme_minimal()
+```
+It has increasing trend. It also displays some ups and downs which are the indication of stochastic trend (non-stationary). In addition to the steady increase, we have some sudden decreases on 1975, 1984 and 1992. 
+```{r}
+p1<-ggAcf(df2,main="ACF of Clay Brick Production")
+p2<-ggPacf(df2,main="PACF of Clay Brick Production")
+grid.arrange(p1,p2,nrow=1)
+```
+Seasonal lags shown are significantly far from zero(slow decay at seasonal lags). ACF plot has slow decay which indicates non stationary series as well. Therefore, it may be concluded that there is a stochastic trend. However it is better to check it via several tests.
+```{r}
+autoplot(decompose(df2))
+```
+<span style="color:darkred">**b.	Split data into train and test.**</span>
+
+Here we use last two years as test, and left as train set. We keep last 8 observation as test set.
+
+```{r}
+train<-window(df2,end=c(1991,4))
+test<-window(df2,start=c(1992))
+```
+
+```{r}
+train
+```
+```{r}
+test
+```
+<span style="color:darkred">**c.	If it needs any transformation, apply Box-Cox transformation. Interpret your results**</span>
+
+```{r}
+BoxCox.ar(train)
+```
+Let's transform the series for specific value of lambda as well.
+```{r}
+lambda <- BoxCox.lambda(train)
+print(lambda)
+```
+```{r}
+df.t<-BoxCox(train,lambda)
+autoplot(df.t)
+```
+```{r}
+lm1 <- lm(value ~ . , data = df.t)
+AIC(lm1)
+stopifnot(all.equal(AIC(lm1),
+                    AIC(logLik(lm1))))
+BIC(lm1)
+```
+<span style="color:darkred">**d.	If there is trend in data, remove the trend by detrending or differencing and evaluate the unit root tests you applied. Interpret your results**</span>
+
+```{r}
+summary(df.t)
+```
+<span style="color:red">**KPSS Test**</span> 
+
+- $H_0$ : The process is stationary. 
+
+- $H_1$ : The process is not stationary.
+
+```{r}
+kpss.test(df.t, null=c("Level"))
+```
+In this case, the p-value is less than the standard alpha value, so we’d reject the null hypothesis and conclude that the series is not stationary.
+
+***H0 is rejected at the first step***, this following hypothesis is used for the second step of the test.
+
+- $H_0$ : There is a deterministic trend
+
+- $H_1$ : There is a stochastic trend.
+
+```{r}
+kpss.test(df.t,null=c("Trend"))
+```
+Since p value is less than alpha, we'd reject the null hypothesis. Therefore we have enough evidence to conclude that the series have stochastic trend. Because the series show a seasonal pattern, seasonal unit root test gives the more realistic results.
+
+<span style="color:red">**HEGY Test**</span> 
+
+***Hypothesis for Regular Unit Root***
+
+- $H_0$ : The system has a regular unit root.
+
+- $H_1$ : The system doesn’t contain any regular unit root.
+
+***Hypothesis for Seasonal Unit Root***
+
+- $H_0$ : The system has a seasonal unit root.
+
+- $H_1$ : The system doesn’t contain any seasonal unit root.
+
+```{r}
+out<-HEGY.test(wts=df.t, itsd=c(1,0,0), regvar=0, selectlags=list(mode="signf", Pmax=NULL))
+out$stats
+```
+```{r}
+out<-HEGY.test(wts=diff(df.t,4), itsd=c(0,0,0), regvar=0, selectlags=list(mode="signf", Pmax=NULL))
+out$stats
+```
+```{r}
+out<-HEGY.test(wts=diff(df.t), itsd=c(0,0,0), regvar=0, selectlags=list(mode="signf", Pmax=NULL))
+out$stats
+```
+```{r}
+out<-HEGY.test(wts=diff(diff(df.t),4), itsd=c(0,0,0), regvar=0, selectlags=list(mode="signf", Pmax=NULL))
+out$stats
+```
+In these outputs, we use p value of tpi_1 for regular unit root and use the p value of Fpi_3:4 for testing seasonal unit root. It is shown that the system has seasonal unit root because p value of Fpi_3:4 is greater than α value (p>0.05), and after taking one seasonal unit root, the regular unit root problem is also solved.
+
+<span style="color:red">**Philips-Perron Unit Root Test**</span> 
+
+- $H_0$ : The process has unit root (non-stationary/stoch. trend)
+
+- $H_1$ : The process does not have unit root.
+
+```{r}
+pp.test(df.t)
+```
+The result of the PP test indicates that the process does not have unit root.
+
+<span style="color:red">**Augmented Dickey Fuller (ADF) Test**</span>
+
+```{r}
+mean(df.t)
+```
+Mean is not equal to zero so we need to add drift term while conducting ADF test.
+
+The hypotheses of ADF test are as follows: 
+
+- $H_0$ : The process has unit root (non-stationary).
+
+- $H_1$ : The process is stationary.
+
+```{r}
+adfTest(df.t, lags=1, type="c") 
+```
+The result of the ADF test indicates that we have a stationary series.
+
+```{r}
+ndiffs(df.t)
+```
+```{r}
+ndiffs(diff(df.t,4))
+```
+```{r}
+nsdiffs(df.t)
+```
+```{r}
+nsdiffs(diff(df.t,4))
+```
+
+<span style="color:darkred">**e.	If there is seasonal unit root in data, remove the seasonal unit root and evaluate the unit root tests you applied. Interpret your results**</span>
+
+<span style="color:red">**Canova-Hansen Test**</span> 
+
+- $H_0$ : The series is purely deterministic and stationary.
+
+- $H_1$ : We have stochastic seasonality.
+
+```{r}
+ch.test(df.t, type= "dummy",sid=c(1:4))
+```
+Since p value (0.0595) is greater than α, we fail to reject the null hypothesis. The seasonal pattern is purely deterministic and stationary.
+Again, we are conflicted in our test outputs, but taking the initiative, we think that there is a seasonal unit root and we decide to apply seasonal differencing.
+
+```{r}
+dif2=diff(df.t, 4) #4 is the frequency of the dataset. 
+autoplot(dif2,main="Time Series Plot of the Differenced Data", ylab="Millions Units")
+```
+```{r}
+out<-HEGY.test(wts=dif2, itsd=c(0,0,0), regvar=0, selectlags=list(mode="signf", Pmax=NULL))
+out$stats
+```
+We reject the null hypothesis and can conclude that the differenced series is stationary.
+
+```{r}
+ch.test(dif2, type = "dummy",sid=c(1:4))
+```
+Since p value is greater than α, we fail to reject the null hypothesis. The seasonal pattern is purely deterministic and stationary.
+
+After taking one seasonal difference, we do not have unit root problem.
+
+```{r}
+mean(dif2)
+```
+```{r}
+adfTest(dif2, lags=1, type="nc") 
+```
+```{r}
+kpss.test(dif2, null=c("Level"))
+```
+<span style="color:darkred">**f.	Identify a proper ARMA, ARIMA or SARIMA model.**</span>
+
+```{r}
+dif2
+```
+```{r}
+p1<-ggAcf(dif2,lag.max=36)
+p2<-ggPacf(dif2,lag.max=36)
+grid.arrange(p1,p2,nrow=1)
+```
+```{r}
+acf(as.vector(dif2),lag.max=36,ci.type='ma')
+```
+```{r}
+autoplot(decompose(dif2))
+```
+- SARIMA(1,0,0)x(2,1,1)[4]
+- SARIMA(0,0,0)x(2,1,3)[4]
+- SARIMA(1,0,0)x(1,1,2)[4]
+and so on...
+We will try some others too.
+
+<span style="color:darkred">**g.	Find the best model and interpret the results**</span>
+
+At the beginning we want to check what we will encounter if it is decided to taking regular differencing as well.
+
+```{r}
+fit1<-Arima(df.t,order = c(0, 1, 0), seasonal = c(2, 1, 3))
+fit1
+```
+```{r}
+fit2<-Arima(df.t,order = c(1, 0, 0), seasonal = c(2, 1, 2))
+fit2
+```
+
+```{r}
+fit3<-Arima(df.t,order = c(1, 0, 0), seasonal = c(2, 1, 3))
+fit3
+```
+The coefficient estimates are all highly significant, and we proceed to check further on this model.
+```{r}
+fit4<-auto.arima(df.t)
+fit4
+```
+
+- SARIMA(1,0,0)x(2,1,3)[4]
+
+
+<span style="color:darkred">**Diagnostic Checking:**</span>
+
+```{r}
+r=resid(fit3)
+```
+
+```{r}
+plot(r, 
+ylab='Standardized Residuals',type='o')
+abline(h=0)
+```
+Other than some strange behavior in the middle of the series, this plot does not suggest any major irregularities with the model, although we may need to investigate the model further for outliers, as the standardized residuals at the first quarter of 1975 and 1984 look suspicious.
+
+```{r}
+ggAcf(as.vector(r),main="ACF of the Residuals",lag = 48)+theme_minimal() #to see time lags, as. factor function is used.
+```
+If all spikes are in the WN band, the residuals are uncorrelated. In the ACF, almost all spikes are in the WN band. To be sure, let us apply formal test.
+
+```{r}
+m = lm(r ~ 1+zlag(r))
+bgtest(m,order=15) #order is up to you
+```
+According to results of Breusch-Godfrey Test, we have 95% confident that the residuals of the model are uncorrelated since p value is greater than alpha.
+
+```{r}
+Box.test(r,lag=15,type = c("Ljung-Box"))
+```
+Since p value is greater than alpha, we have 95% confident that the residuals of the model are uncorrelated, according to results of Box-Pierce Test.
+
+```{r}
+ggplot(r, aes(sample = r)) +stat_qq()+geom_qq_line()+ggtitle("QQ Plot of the Residuals")+theme_minimal()
+```
+QQ Plot show that most of the residuals of the model do not lie on 45 degree straight line (especially though tails). This indicates residuals are not normally distributed.
+
+```{r}
+ggplot(r,aes(x=r))+geom_histogram(bins=20)+geom_density()+ggtitle("Histogram of Residuals")+theme_minimal()
+```
+
+```{r}
+jarque.bera.test(r)
+```
+```{r}
+shapiro.test(r)
+```
+Since p value is less than alpha , we reject Ho. Therefore,it can be said that we do not have enough evidence to claim that we have residuals with normal distribution. Luckily, We’ll apply Box-Cox transformation onto residuals as well.
+
+```{r}
+rr=r^2
+g1<-ggAcf(as.vector(rr))+theme_minimal()+ggtitle("ACF of Squared Residuals")
+g2<-ggPacf(as.vector(rr))+theme_minimal()+ggtitle("PACF of Squared Residuals")  # homoscedasticity check
+grid.arrange(g1,g2,ncol=2)
+```
+```{r}
+m = lm(r ~ df.t+zlag(df.t)+zlag(df.t,2))
+bptest(m)
+```
+Since p value is greater than alpha, we fail reject Ho. Therefore, we can say that we have enough evidence to claim that there is no heteroscedasticity problem, according to results of Breusch-Pagan test.

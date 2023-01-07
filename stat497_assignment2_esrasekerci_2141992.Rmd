@@ -1,0 +1,458 @@
+---
+title: "stat497"
+author: "E.Sekerci"
+date: "`r Sys.Date()`"
+output:
+  rmdformats::material:
+    code_folding: show
+---
+
+# **Assignment 2**
+
+<span style="color:red">**Data Description**</span>
+
+The debitcards data are about Monthly retail debit card usage in Iceland (million ISK). January 2000 - August 2013.
+
+<span style="color:red">**Initial Settings**</span>
+
+```{r}
+## Loading packages
+library(readr)
+library(tidyverse)
+library(lubridate)
+library(gridExtra)
+library(doParallel)
+library(sarima)
+library(forecast)
+library(ggplot2)
+library(dplyr)
+library(hrbrthemes)
+library(plotly)
+library(stats)
+library(fpp2)
+library(fUnitRoots)
+library(pdR)
+library(TSA)
+library(caschrono)
+library(anomalize)
+library(tibbletime)
+library(fpp2)
+library(aTSA)
+library(MASS)
+library(tseries)
+library(tidyquant)
+library(timetk)
+library(knitr)
+library(uroot)
+library(lmtest)
+library(MTS)
+```
+
+```{r}
+## Loading data set
+df <- debitcards
+df
+```
+```{r}
+str(df)
+```
+```{r}
+summary(df)
+```
+```{r}
+sd(df)
+```
+```{r}
+ggseasonplot(x = as.ts(df), year.labels=FALSE, continuous=TRUE)
+ggseasonplot(x = as.ts(df), polar = TRUE) +
+  labs(y = "Millions (ISK)",
+       title = "Seasonal Plot: Retail Debit Card Usage")
+```
+A particular useful variant of a season plot uses polar coordinates, where the time axis is circular rather than horizontal. Here, we plot the data with the conventional seasonal plot versus a polar coordinate option to illustrate this variant. Both plots illustrate a sharp increase in values in December and then a slow increase from Apr-Jul.
+
+```{r}
+gglagplot(df) + ggtitle("Monthly retail debit card usage in Iceland") + theme(axis.text.x = element_text(angle=90))
+```
+The plot provides the bivariate scatter plot for each level of lag (1-16 lags). If you look at the right-most 12 lag, you can see that the relationship appears strongest for it, thus supporting our seassonality pattern which appearss in the acf plot as well.
+
+```{r}
+ggsubseriesplot(df) + ggtitle("Monthly retail debit card usage in Iceland")
+```
+This form of plot enables the underlying seasonal pattern to be seen clearly, and also shows the changes in seasonality over time. It is especially useful in identifying changes within particular seasons. The plot displays the seasonality of Monthly retail debit card usage in Iceland, as it is lowest in the first quarter, increase through until August and then decreases in the fourth quarter, on December reaches the highest point of the year. The seasonality appears to have a frequency of 12 months, or 1 year.
+
+<span style="color:darkred">**a.	(7.5 pts) Draw time series plot , ACF and PACF ; and examine carefully the trend and seasonal phenomenon contained in the data. Interpret your results.**</span> 
+
+```{r}
+autoplot(df, ylab="million (ISK)", main="Monthly retail debit card usage in Iceland", col="blue")+theme_minimal()
+```
+It has increasing trend. It also displays some ups and downs which are the indication of stochastic trend (non-stationary).
+
+```{r}
+p1<-ggAcf(df, lag.max=48)
+p2<-ggPacf(df, lag.max=48)
+grid.arrange(p1,p2,nrow=1)
+```
+Seasonal lags shown are significantly far from zero (slow decay at seasonal lags), and the only pattern is perhaps a linear decrease with increasing lag. ACF plot has slow decay which indicates non stationary series as well. Therefore, it may be concluded that there is a stochastic trend. However it is better to check it via several tests.
+
+```{r}
+decomposed <- df %>%
+  stl(t.window=15, s.window="periodic", robust=TRUE) %>%
+  autoplot()+ xlab("Year") +
+  ggtitle("STL decomposition")+theme_minimal()
+decomposed
+```
+
+<span style="color:darkred">**b.	(3 pts) Split data into train and test (Keep last 12 observations as test data set).**</span>
+
+Here we use last 12 months as test, and left as train set. We keep last 12 observation as test set.
+
+```{r}
+train<-window(df,end=c(2012,8))
+test<-window(df,start=c(2012,9))
+```
+
+```{r}
+train
+```
+```{r}
+test
+```
+<span style="color:darkred">**c.	(3 pts) If it needs any transformation, apply Box-Cox transformation. Interpret your results.**</span>
+
+```{r}
+BoxCox.ar(train)
+```
+Since the 95% confidence interval for λ contains the value 0 (quite near its center), strongly suggests a logarithmic transformation (λ = 0) for these data.
+
+Let's transform the series for specific value of lambda as well.
+
+```{r}
+lambda <- BoxCox.lambda(train)
+print(lambda)
+```
+```{r}
+autoplot(log(train))
+```
+```{r}
+df.t<-log(train)
+summary(df.t)
+```
+We can Use either 0.08-th power of the series or do logarithmic transformations since the λ is very close to 0. It was decided to use the form with logarithmic transformation.
+
+<span style="color:darkred">**d.	(12.5 pts) Check the existence of unit roots (both regular and seasonal) via appropriate test. If you detect unit root, take the necessary action to make your series stationary and verify whether your action works.**</span>
+
+```{r}
+kpss.test(df.t, null=c("Level"))
+```
+In this case, the p-value is less than the standard alpha value, so we’d reject the null hypothesis and conclude that the series is not stationary.
+
+```{r}
+kpss.test(df.t,null=c("Trend"))
+```
+Since p value is less than alpha, we'd reject the null hypothesis. Therefore we have enough evidence to conclude that the series have stochastic trend. Since the series show a seasonal pattern, seasonal unit root test gives the more realistic results.
+
+```{r}
+ch.test(df.t, type = c("dummy", "trigonometric"), lag1 = FALSE, NW.order = NULL, 
+  sid = NULL, xreg = NULL, pvalue = c("RS", "raw"), rs.nobsreg = 13)
+```
+```{r}
+out<-HEGY.test(wts=df.t, itsd=c(1,0,0), regvar=0, selectlags=list(mode="signf", Pmax=NULL))
+out$stats
+```
+```{r}
+mean(diff(df.t,12))
+```
+```{r}
+out<-HEGY.test(wts=diff(df.t,12), itsd=c(0,0,0), regvar=0, selectlags=list(mode="signf", Pmax=NULL))
+out$stats
+```
+```{r}
+mean(diff(df.t))
+```
+```{r}
+out<-HEGY.test(wts=diff(df.t), itsd=c(0,0,0), regvar=0, selectlags=list(mode="signf", Pmax=NULL))
+out$stats
+```
+
+```{r}
+mean(diff(diff(df.t),12))
+```
+
+```{r}
+out<-HEGY.test(wts=diff(diff(df.t),12), itsd=c(0,0,0), regvar=0, selectlags=list(mode="signf", Pmax=NULL))
+out$stats
+```
+In these outputs, we use p value of tpi_1 for regular unit root and use the p value of Fpi_11:12 for testing seasonal unit root. It is shown that the system has seasonal unit root because p value of Fpi_11:12 is greater than α value (p>0.05), and after taking both seasonal and regular differencing, unit root problem is solved.
+
+```{r}
+ndiffs(df.t)
+```
+```{r}
+ndiffs(diff(df.t,12))
+```
+```{r}
+nsdiffs(df.t)
+```
+```{r}
+nsdiffs(diff(df.t,12))
+```
+```{r}
+ndiffs(diff(diff(df.t),12))
+```
+```{r}
+nsdiffs(diff(diff(df.t),12))
+```
+```{r}
+dif=diff(diff(df.t),12)
+autoplot(dif,main="TS Plot of Differenced Series")
+```
+Differenced series seems mean stationary around zero.
+
+```{r}
+mean(dif)
+```
+```{r}
+adfTest(dif, type="c")
+```
+We reject the null hypothesis and can conclude that the differenced series is stationary.
+
+```{r}
+pp.test(dif)
+```
+The result of the PP test indicates that we have a stationary series.
+
+```{r}
+kpss.test(dif,null=c("Level"))
+```
+Differenced series is stationary.
+
+```{r}
+ch.test(dif, type = c("dummy", "trigonometric"), lag1 = FALSE, NW.order = NULL, 
+  sid = NULL, xreg = NULL, pvalue = c("RS", "raw"), rs.nobsreg = 13)
+```
+Since p value is greater than α, we fail to reject the null hypothesis. The seasonal pattern is purely deterministic and stationary.
+
+<span style="color:darkred">**e.	(3 pts) After obtaining stationary series, suggest a model (or models) using appropriate way. Write the model name with their order.**</span> 
+
+```{r}
+dif
+```
+```{r}
+p1<-ggAcf(dif,lag.max=60)
+p2<-ggPacf(dif,lag.max=60)
+grid.arrange(p1,p2,nrow=1)
+```
+- SARIMA(2,1,1)x(1,1,2)[12]
+
+- SARIMA(2,1,0)x(2,1,2)[12]
+
+- SARIMA(2,1,1)x(2,1,3)[12]
+
+and so on...
+We will try some others too.
+
+<span style="color:darkred">**f.	(10 pts) Fit the models that you decided in the previous part. Also, fit a model using auto.arima(). Then, check the significance of the models and find the best model.**</span> 
+
+```{r}
+fit1<-Arima(df.t,order = c(2, 1, 1), seasonal = c(3, 1, 3))
+fit1
+```
+
+```{r}
+fit2<-Arima(df.t,order = c(2, 1, 0), seasonal = c(2, 1, 3))
+fit2
+```
+
+```{r}
+fit3<-Arima(df.t,order = c(2, 1, 0), seasonal = c(1, 1, 3))
+fit3
+```
+The coefficient estimates are all highly significant, and we proceed to check further on this model.
+
+```{r}
+fit4<-Arima(df.t,order = c(2, 1, 1), seasonal = c(1, 1, 2))
+fit4
+```
+
+```{r}
+fit5<-Arima(df.t,order = c(2, 0, 1), seasonal = c(2, 1, 3))
+fit5
+```
+```{r}
+fit6<-auto.arima(df.t)
+fit6
+```
+
+- SARIMA(2,1,0)x(1,1,3)[12] is the model chosen.
+
+
+<span style="color:darkred">**g.	(10 pts) Apply Diagnostic Checking. Interpret the results.**</span>
+
+<span style="color:red">**a)	On the residuals, perform portmanteau lack of fit test, look at the ACF-PACF plots of the residuals (for all time points, ACF and PACF values should be in the white noise bands), look at the standardized residuals vs time plot to see any outliers or pattern.**</span>
+
+```{r}
+r=resid(fit3)
+```
+
+```{r}
+autoplot(r)+geom_line(y=0)+theme_minimal()+ggtitle("Plot of The Residuals")
+```
+Other than some strange behavior in the middle of the series, this plot does not suggest any major irregularities with the model, although we may need to investigate the model further for outliers, as the standardized residuals at January 2005 and December 2006 look suspicious.
+
+```{r}
+acf(as.vector(r),main="ACF of the Residuals",lag = 60)+theme_minimal()
+```
+```{r}
+pacf(as.vector(r),main="PACF of the Residuals",lag = 60)+theme_minimal()
+```
+In both ACF and PACF, almost all spikes, other than 23th one, are in the WN band. Therefore, we can say that the residuals are uncorrelated, nevertheless to be sure, we'll also apply formal test.
+
+```{r}
+plot(rstandard(fit3),ylab='Standardized residuals',type='l')
+abline(h=0)
+```
+<span style="color:red">**b)	Use histogram, QQ-plot and Shapiro-Wilk test (in ts analysis, economists prefer Jarque-Bera test) to check normality of residuals.**</span> 
+
+```{r}
+ggplot(r, aes(sample = r)) +stat_qq()+geom_qq_line()+ggtitle("QQ Plot of the Residuals")+theme_minimal()
+```
+
+QQ Plot show that some of the residuals of the model do not lie on 45 degree straight line (especially though tails). This indicates residuals are not normally distributed.
+
+```{r}
+ggplot(r,aes(x=r))+geom_histogram(bins=20)+geom_density()+ggtitle("Histogram of Residuals")+theme_minimal()
+```
+
+```{r}
+#calculate skewness
+skewness(r)
+```
+
+```{r}
+#calculate kurtosis
+kurtosis(r)
+```
+
+```{r}
+shapiro.test(r)
+```
+```{r}
+jarque.bera.test(r)
+```
+Since p value is less than alpha , we reject Ho. Therefore,it can be said that we do not have enough evidence to claim that we have residuals with normal distribution. In this situation, we’ll apply Box-Cox transformation. On the other hand, we already did it, so we pass this step for now.
+
+<span style="color:red">**c)	Perform Breusch-Godfrey test for possible autocorrelation in residual series. The result should be insignificant.**</span> 
+
+```{r}
+m = lm(r ~ 1+zlag(r))
+bgtest(m,order=15) #order is up to you
+```
+According to results of Breusch-Godfrey Test, we have 95% confident that the residuals of the model are not correlated since p value is greater than alpha.
+
+```{r}
+Box.test(r,lag=15,type = c("Ljung-Box"))
+```
+Since p value is greater than alpha, we have 95% confident that the residuals of the model are uncorrelated, according to results of Box-Ljung Test.
+
+```{r}
+Box.test(r,lag=15,type = c("Box-Pierce"))
+```
+Since p value is greater than alpha, we have 95% confident that the residuals of the model are uncorrelated, according to results of Box-Pierce Test
+
+<span style="color:red">**d)	For the Heteroscedasticity, look at the ACF-PACF plots of the squared residuals (there should be no significant spikes); perform ARCH Engle's Test for Residual Heteroscedasticity under aTSA package. The result should be insignificant. If the result is significant, you can state that the error variance is not constant and it should be modelled, but don’t intend to model the variance. If there is a heteroscedasticity problem, most probably normality test on residuals will fail too. The high values in the lower and upper extremes destroy the normality due to high variation. In your project, you can state these only. When solving a real life problem, you cannot just state and quit dealing this problem!**</span> 
+
+```{r}
+rr=r^2
+g1<-ggAcf(as.vector(rr), lag.max=60)+theme_minimal()+ggtitle("ACF of Squared Residuals")
+g2<-ggPacf(as.vector(rr), lag.max=60)+theme_minimal()+ggtitle("PACF of Squared Residuals")  # homoscedasticity check
+grid.arrange(g1,g2,ncol=2)
+```
+Both plots shows that almost all the spikes are in the white noise band that is an indication of heteroscedasticity will not be a problem.
+
+```{r}
+m = lm(r ~ df.t+zlag(df.t)+zlag(df.t,2))
+bptest(m)
+```
+Since p value is greater than alpha, we fail to reject Ho. Therefore, we can say that we  do not have enough evidence to claim that there is not heteroscedasticity problem, according to results of Breusch-Pagan test.
+
+```{r}
+m1 = lm(r ~ df.t+zlag(df.t)+zlag(df.t,2)+zlag(df.t)^2+zlag(df.t,2)^2+zlag(df.t)*zlag(df.t,2))
+bptest(m1)
+```
+Since p value is greater than alpha, we fail to reject Ho. Therefore, we can say that we do not have enough evidence to claim that there is heteroscedasticity problem. 
+
+<span style="color:darkred">**h.	(5 pts) After deciding S/ARIMA model, obtain 12 steps ahead forecast from the model and calculate accuracy.**</span>
+
+```{r}
+f<-forecast::forecast(fit3, h = 12)
+f
+```
+```{r}
+autoplot(f)+theme_minimal()+ggtitle("Forecast of SARIMA")
+```
+```{r}
+fr1<-exp(f$mean)
+accuracy(fr1, test)
+```
+<span style="color:darkred">**i.	(15 pts) Obtain 12 steps ahead forecasts from ETS, TBATS, NN, and calculate their accuracy values.**</span>
+
+```{r}
+f.ets <- ets(train, model = "ZZZ")
+summary(f.ets)
+```
+
+```{r}
+fr2=forecast::forecast(f.ets, h=12)
+fr2
+```
+```{r}
+autoplot(fr2)+autolayer(fitted(fr2),series="fitted")+theme_minimal()
+```
+```{r}
+accuracy(fr2, test)
+```
+
+```{r}
+tbatsmodel<-forecast::tbats(train)
+tbatsmodel
+```
+
+```{r}
+autoplot(train,main="TS plot of Train with TBATS Fitted") +autolayer(fitted(tbatsmodel), series="Fitted") +theme_minimal()
+```
+```{r}
+f.tbats<-forecast::forecast(tbatsmodel,h=12)
+f.tbats
+```
+```{r}
+autoplot(f.tbats)+autolayer(test,series="actual",color="red")+theme_minimal()
+```
+```{r}
+accuracy(f.tbats,test)
+```
+```{r}
+nnmodel<-nnetar(train)
+nnmodel
+```
+```{r}
+autoplot(train)+autolayer(fitted(nnmodel))+theme_minimal()+ggtitle("Fitted Values of NN Model")
+```
+```{r}
+f.nn<-forecast::forecast(nnmodel,h=12,PI=TRUE)
+f.nn
+```
+
+```{r}
+autoplot(f.nn)+theme_minimal()
+```
+
+```{r}
+accuracy(f.nn,test)
+```
+
+<span style="color:darkred">**j.	(6 pts) Compare the results in part h and part i and write the name of the model showing the best forecasting performance.**</span>
+
+The ARIMA model did not perform very well for all measurements comparing to the other model trials, model has particularly large mean errors. The RMSEs and mean percentage errors were somewhat similar between the models, however the neural networks model outperformed them, therefore the neural networks model prevailed on the MASE metric with the best forecasting performance.
+
+
+
